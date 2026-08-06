@@ -1,5 +1,7 @@
 # Network Traffic File Recovery Tool
 
+[![CI](https://github.com/d3vn0mi/Pcap-File-Recovery-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/d3vn0mi/Pcap-File-Recovery-Tool/actions/workflows/ci.yml)
+
 A comprehensive Python tool for extracting and recovering files from network packet captures (PCAP files). Originally designed for digital forensics and CTF challenges, this tool can reconstruct files that were transferred, exfiltrated, or embedded within network traffic across multiple protocols.
 
 ## 🚀 Features
@@ -9,42 +11,54 @@ A comprehensive Python tool for extracting and recovering files from network pac
 - **Covert Channel Detection**: Discovers data hidden in DNS queries and ICMP packets
 - **HTTP Analysis**: Recovers uploaded files and downloaded content from HTTP traffic
 - **Email Attachments**: Extracts attachments from SMTP email traffic
+- **Hardened Against Hostile Captures**: Filenames carved from packet data are sanitized (no path traversal), carve sizes and file counts are capped, and malformed captures fail cleanly
 - **Comprehensive Reporting**: Detailed analysis reports with file metadata
 - **Automatic Organization**: Saves recovered files with descriptive names and source information
 
 ## 📋 Requirements
 
-- Python 3.6+
-- Scapy library
+- Python 3.11+
+- Scapy library (installed automatically)
 
-### Installation
+## 📦 Installation
 
 ```bash
-# Install required dependencies
-pip install scapy
+# Recommended: install as a CLI tool with pipx
+pipx install git+https://github.com/d3vn0mi/Pcap-File-Recovery-Tool.git
 
-# Clone the repository
-git clone https://github.com/yourusername/pcap-file-recovery.git
-cd pcap-file-recovery
-
-# Make the script executable (optional)
-chmod +x file_recovery.py
+# Or: clone and install into your environment
+git clone https://github.com/d3vn0mi/Pcap-File-Recovery-Tool.git
+cd Pcap-File-Recovery-Tool
+pip install -e .
 ```
 
 ## 🔧 Usage
 
 ### Basic Usage
-```bash
-# Analyze capture.pcapng (default filename)
-python file_recovery.py
 
-# The tool expects a file named 'capture.pcapng' in the same directory
+```bash
+# Analyze a capture (defaults to capture.pcapng in the current directory)
+pcap-file-recovery capture.pcapng
+
+# Choose a different output directory
+pcap-file-recovery evidence.pcap -o carved_output
+
+# Also works as a module
+python -m pcap_file_recovery capture.pcapng
+
+# Legacy invocation (thin shim kept for compatibility)
+python fire_recovery.py
 ```
 
+> **Note on layout**: the implementation moved from a single `fire_recovery.py`
+> script into a proper package under `src/pcap_file_recovery/`. The root-level
+> `fire_recovery.py` is now a thin shim that calls the packaged CLI, so old
+> muscle memory still works after `pip install -e .`.
+
 ### Input Requirements
-- **PCAP File**: Place your packet capture file in the same directory as the script
-- **Filename**: Rename your capture file to `capture.pcapng` or modify the script to use a different filename
-- **Permissions**: Ensure read permissions on the PCAP file
+- **PCAP File**: Pass the path to any libpcap/pcapng capture as the first argument
+- **Default**: With no arguments the tool looks for `capture.pcapng` in the current directory
+- **Permissions**: Ensure read permissions on the PCAP file and write permissions for the output directory
 
 ### Output Structure
 ```
@@ -60,23 +74,19 @@ recovered_files/
 └── recovery_summary.txt     # Detailed analysis report
 ```
 
-## 🔍 Analysis Methods
+## 🔍 How It Works
 
-### HTTP Traffic Analysis
-- **File Downloads**: Extracts files from HTTP responses with `Content-Disposition` headers
-- **File Uploads**: Recovers multipart form data uploads
-- **Content-Type Detection**: Automatically assigns file extensions based on MIME types
-- **Header Parsing**: Extracts original filenames when available
+The tool loads the capture with Scapy, then runs seven extraction passes over the packets:
 
-### FTP Traffic Analysis
-- **Control Channel**: Monitors FTP commands to identify file transfers
-- **Data Channel**: Captures file content from FTP data streams (ports 20/21)
-- **Passive Mode**: Supports both active and passive FTP transfers
+1. **HTTP**: parses response/upload headers, pulls filenames from `Content-Disposition`, carves the body after the header block
+2. **FTP**: watches the control channel (port 21) for `STOR` commands and reassembles data-channel (port 20) streams
+3. **SMTP**: finds `Content-Disposition: attachment` parts and base64-decodes them
+4. **TCP streams**: groups payloads by connection 4-tuple and scans the reassembled stream for file signatures
+5. **DNS**: decodes hex-encoded labels in query names (exfiltration detection)
+6. **ICMP**: collects oversized echo payloads (covert channel detection)
+7. **Signatures**: scans all raw payloads for magic numbers with header/footer carving
 
-### Email (SMTP) Analysis
-- **Attachment Extraction**: Recovers email attachments from SMTP traffic
-- **Base64 Decoding**: Automatically decodes base64-encoded attachments
-- **Filename Preservation**: Maintains original attachment filenames
+Every filename that originates from packet data is treated as hostile and reduced to a safe basename before anything is written to disk.
 
 ### File Signature Detection
 Identifies files by their magic number signatures:
@@ -85,11 +95,6 @@ Identifies files by their magic number signatures:
 - **Executables**: Windows PE (.exe), Linux ELF
 - **Media**: WAV, MP3
 - **Archives**: ZIP, RAR, GZIP
-
-### Covert Channel Detection
-- **DNS Exfiltration**: Detects hex-encoded data in DNS query names
-- **ICMP Tunneling**: Identifies non-standard data in ICMP packets
-- **TCP Stream Analysis**: Searches for file signatures across all TCP connections
 
 ## 📊 Example Output
 
@@ -100,7 +105,6 @@ Loaded 15847 packets
 
 [+] Analyzing HTTP traffic...
   [+] Recovered: document.pdf (245760 bytes) from HTTP Response
-  [+] Recovered: http_file_0.bin (1024 bytes) from HTTP Response
 
 [+] Analyzing FTP traffic...
   Found FTP upload: important_file.txt
@@ -115,19 +119,11 @@ Loaded 15847 packets
 [+] Checking for DNS exfiltration...
   [+] Recovered: dns_exfiltrated_data.bin (512 bytes) from DNS Exfiltration
 
-[+] Checking ICMP packets for hidden data...
-  [+] Recovered: icmp_hidden_data.bin (1536 bytes) from ICMP Covert Channel
-
 ============================================================
 FILE RECOVERY REPORT
 ============================================================
 Total files recovered: 15
 Files saved to: recovered_files/
-
-File: document.pdf
-Size: 245760 bytes
-Source: HTTP Response
-Path: recovered_files/document.pdf
 ```
 
 ## 🎯 Use Cases
@@ -142,94 +138,64 @@ Path: recovered_files/document.pdf
 - **File Recovery**: Extract hidden flags from network captures
 - **Protocol Analysis**: Understand how data was transmitted
 - **Steganography**: Find files hidden in unexpected protocols
-- **Reverse Engineering**: Recover original files for further analysis
 
 ### Network Security
 - **DLP Monitoring**: Detect unauthorized file transfers
-- **Policy Compliance**: Verify file transfer compliance
 - **Threat Hunting**: Search for suspicious file activities
-- **Baseline Analysis**: Understand normal file transfer patterns
 
-## 🔧 Technical Details
+## 🛡️ Security Hardening
 
-### Supported File Types
-| Category | Formats | Detection Method |
-|----------|---------|------------------|
-| Images | PNG, JPG, GIF, BMP, ICO | Magic number + boundary detection |
-| Documents | PDF | Header/footer markers |
-| Archives | ZIP, RAR, GZIP | Magic number signatures |
-| Executables | PE (.exe), ELF | Platform-specific headers |
-| Media | WAV, MP3 | Format-specific signatures |
+This tool parses **untrusted input** by definition — captures often come straight from an attacker's traffic. The parser is hardened accordingly:
 
-### Protocol Support
-| Protocol | Port(s) | Extraction Method |
-|----------|---------|-------------------|
-| HTTP | 80, 8080, etc. | Header parsing + content extraction |
-| HTTPS | 443 | Limited (encrypted content) |
-| FTP | 20, 21 | Command monitoring + data capture |
-| SMTP | 25 | Email parsing + attachment extraction |
-| DNS | 53 | Query analysis for exfiltration |
-| ICMP | N/A | Payload analysis for covert channels |
+- **Filename sanitization**: names carved from `Content-Disposition` headers, multipart uploads, or SMTP attachments are stripped of path components, null bytes, and control characters before writing (no `../../` traversal, no absolute paths, no terminal escape injection)
+- **No clobbering**: duplicate filenames get a numeric suffix instead of overwriting earlier evidence
+- **Resource caps**: carves without an end marker are limited to 1 MB; total carved files are capped (default 1000) so a signature-bomb capture cannot exhaust disk or inodes
+- **Graceful failure**: truncated captures, forged record-length fields, and non-pcap input are reported and exit cleanly instead of crashing mid-analysis
+- **Sandboxing advice**: recovered files may be malware — analyze the output directory in an isolated environment
 
-### Performance Considerations
-- **Memory Usage**: Processes large PCAP files efficiently
-- **File Size Limits**: Automatically limits extracted files to 1MB for safety
-- **Stream Reconstruction**: Properly reassembles fragmented TCP streams
-- **Duplicate Handling**: Prevents duplicate file extraction
+## 🧪 Development & Testing
 
-## 🛠️ Customization
+```bash
+git clone https://github.com/d3vn0mi/Pcap-File-Recovery-Tool.git
+cd Pcap-File-Recovery-Tool
 
-### Modifying Input File
-```python
-# Change the default PCAP filename
-pcap_file = "your_capture_file.pcap"
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Run the test suite (synthetic pcaps are built in code — no binary fixtures)
+pytest
+
+# Lint
+ruff check .
 ```
 
-### Adding File Signatures
-```python
-# Add new file signatures to find_files_by_signature()
-file_signatures = {
-    b'\x42\x4D': ('BMP', b'\x42\x4D', None),  # BMP files
-    # Add your custom signatures here
-}
-```
+CI runs `ruff check` and `pytest` on Python 3.11, 3.12, and 3.13 for every push and pull request.
 
-### Adjusting Output Directory
-```python
-# Change the output directory
-self.output_dir = "custom_output_folder"
+### Project Layout
+```
+├── src/pcap_file_recovery/
+│   ├── __init__.py          # Package exports
+│   ├── __main__.py          # python -m pcap_file_recovery
+│   ├── cli.py               # Argument parsing / console entry point
+│   └── recovery.py          # FileRecoveryTool and carving logic
+├── tests/                   # Pytest suite with in-code pcap fixtures
+├── fire_recovery.py         # Backwards-compatible shim
+└── pyproject.toml           # Packaging, ruff, and pytest configuration
 ```
 
 ## 🚨 Troubleshooting
 
-### Common Issues
-
 **"Error loading PCAP" message**
 - Verify the PCAP file exists and is readable
 - Check if the file is corrupted with `tcpdump -r filename.pcap`
-- Ensure sufficient permissions to read the file
 
 **No files recovered**
 - Verify the PCAP contains actual file transfers
 - Check if traffic is encrypted (HTTPS/TLS)
 - Try analyzing with Wireshark to confirm file transfers exist
 
-**Permission denied errors**
-- Run with appropriate user permissions
-- Check write permissions in the current directory
-- Ensure the output directory is writable
-
 **Large PCAP files causing memory issues**
-- Split large PCAP files using `tcpdump` or `editcap`
-- Increase system memory or use a machine with more RAM
-- Process specific time ranges or protocols
-
-### Debugging Tips
-
-1. **Use Wireshark**: First analyze the PCAP in Wireshark to understand the traffic
-2. **Check Protocols**: Verify which protocols contain file transfers
-3. **Examine Headers**: Look for Content-Disposition and Content-Type headers
-4. **Test with Known Files**: Use a PCAP with known file transfers for testing
+- The whole capture is loaded into memory by Scapy; split large PCAP files using `tcpdump` or `editcap`
 
 ## 🤝 Contributing
 
@@ -237,24 +203,9 @@ Contributions are welcome! Here are ways you can help:
 
 - **Add Protocol Support**: Implement extraction for additional protocols
 - **Improve File Detection**: Add new file signature patterns
-- **Enhance Error Handling**: Make the tool more robust
 - **Performance Optimization**: Improve processing speed for large files
-- **Documentation**: Help improve this README and code comments
 
-### Development Setup
-```bash
-git clone https://github.com/yourusername/pcap-file-recovery.git
-cd pcap-file-recovery
-
-# Install development dependencies
-pip install scapy pytest
-
-# Run tests (if available)
-python -m pytest tests/
-
-# Test with sample PCAP
-python file_recovery.py
-```
+Please make sure `pytest` and `ruff check .` pass before opening a pull request.
 
 ## 📄 License
 
@@ -267,25 +218,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **NetworkMiner**: Network forensic analysis tool
 - **Scapy**: Python packet manipulation library (used by this tool)
 - **Foremost**: File carving tool for forensic analysis
-
-## 📞 Support
-
-If you encounter issues or have questions:
-
-1. **Check the troubleshooting section** above
-2. **Search existing issues** on GitHub
-3. **Create a new issue** with:
-   - Description of the problem
-   - Sample PCAP file (if possible)
-   - Error messages
-   - System information
-
-## 🏆 Acknowledgments
-
-- **Scapy developers** for the excellent packet manipulation library
-- **Digital forensics community** for file signature databases
-- **CTF community** for creative file hiding techniques
-- **Network security researchers** for covert channel detection methods
 
 ---
 
