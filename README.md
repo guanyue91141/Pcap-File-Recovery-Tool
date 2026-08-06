@@ -207,6 +207,10 @@ Contributions are welcome! Here are ways you can help:
 
 Please make sure `pytest` and `ruff check .` pass before opening a pull request.
 
+## ✍️ Author
+
+**d3vn0mi** — [github.com/d3vn0mi](https://github.com/d3vn0mi)
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
